@@ -10,16 +10,21 @@
     "toki": "./dist/index.js"
   },
   "scripts": {
-    "dev": "npm run build -w @toki/tui && tsx src/index.ts",
-    "build": "npm run build -w @toki/tui && tsc -p tsconfig.json",
+    "build:packages": "npm run build -w @toki/shared && npm run build -w @toki/providers && npm run build -w @toki/agent-core && npm run build -w @toki/coding-agent && npm run build -w @toki/tui",
+    "dev": "npm run build:packages && tsx src/index.ts",
+    "build": "npm run build:packages && tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "test": "vitest run",
+    "test": "npm run build:packages && vitest run",
     "test:watch": "vitest"
   },
   "engines": {
     "node": ">=20.11.0"
   },
   "dependencies": {
+    "@toki/agent-core": "workspace:*",
+    "@toki/coding-agent": "workspace:*",
+    "@toki/providers": "workspace:*",
+    "@toki/shared": "workspace:*",
     "@toki/tui": "workspace:*",
     "@iarna/toml": "^2.2.5",
     "commander": "^14.0.1",

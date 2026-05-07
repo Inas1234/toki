@@ -42,14 +42,25 @@ interface InlineToken {
   href?: string;
 }
 
+export function sanitizeRenderableContent(content: string): string {
+  return content
+    .replace(/<tool_calls>[\s\S]*?<\/tool_calls>/gi, "")
+    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "")
+    .replace(/\[tool_calls?\][\s\S]*?\[\/tool_calls?\]/gi, "")
+    .replace(/^\s*\{tool:\s*".*$/gim, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function parseMarkdown(content: string): MarkdownSegment[] {
   const segments: MarkdownSegment[] = [];
+  const sanitizedContent = sanitizeRenderableContent(content);
   const regex = /```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g;
   let last = 0;
-  let match = regex.exec(content);
+  let match = regex.exec(sanitizedContent);
   while (match) {
     if (match.index > last) {
-      segments.push({ kind: "text", value: content.slice(last, match.index) });
+      segments.push({ kind: "text", value: sanitizedContent.slice(last, match.index) });
     }
     segments.push({
       kind: "code",
@@ -59,10 +70,10 @@ function parseMarkdown(content: string): MarkdownSegment[] {
     last = match.index + match[0].length;
     match = regex.exec(content);
   }
-  if (last < content.length) {
-    segments.push({ kind: "text", value: content.slice(last) });
+  if (last < sanitizedContent.length) {
+    segments.push({ kind: "text", value: sanitizedContent.slice(last) });
   }
-  return segments.length > 0 ? segments : [{ kind: "text", value: content }];
+  return segments.length > 0 ? segments : [{ kind: "text", value: sanitizedContent }];
 }
 
 function parseInlineMarkdown(line: string): InlineToken[] {
@@ -151,15 +162,6 @@ function renderMarkdownLine(line: string, key: string, baseColor: string): React
     return (
       <Text key={key} color={baseColor}>
         {" "}
-      </Text>
-    );
-  }
-
-  const thinking = line.match(/^~\s+(.*)$/);
-  if (thinking) {
-    return (
-      <Text key={key} color={TOKI_THEME.muted} dimColor italic>
-        {thinking[1] ?? ""}
       </Text>
     );
   }
@@ -290,6 +292,40 @@ function renderMarkdownLine(line: string, key: string, baseColor: string): React
   );
 }
 
+function renderTextSegmentWithThinking(segmentValue: string, messageId: number, segmentIndex: number, baseColor: string): React.ReactNode[] {
+  const lines = segmentValue.split(/\r?\n/);
+  const nodes: React.ReactNode[] = [];
+  let inThinkingBlock = false;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    const thinking = line.match(/^~\s+(.*)$/);
+    const keyBase = `${messageId}-t-${segmentIndex}-${i}`;
+
+    if (thinking) {
+      if (!inThinkingBlock) {
+        nodes.push(
+          <Text key={`${keyBase}-label`} color={TOKI_THEME.muted} dimColor>
+            thinking
+          </Text>
+        );
+        inThinkingBlock = true;
+      }
+      nodes.push(
+        <Text key={`${keyBase}-item`} color={TOKI_THEME.muted} dimColor italic>
+          {`  - ${thinking[1] ?? ""}`}
+        </Text>
+      );
+      continue;
+    }
+
+    inThinkingBlock = false;
+    nodes.push(renderMarkdownLine(line, keyBase, baseColor));
+  }
+
+  return nodes;
+}
+
 export function TokiHeader({ header, version = "0.1.0" }: { header: HeaderInfo; version?: string }) {
   return (
     <Box flexDirection="column" marginBottom={1}>
@@ -371,7 +407,7 @@ function MessageRow({ message }: { message: TuiMessage }) {
           </Box>
         ) : (
           <Box key={`${message.id}-text-${index}`} flexDirection="column">
-            {segment.value.split(/\r?\n/).map((line, i) => renderMarkdownLine(line, `${message.id}-t-${index}-${i}`, contentColor))}
+            {renderTextSegmentWithThinking(segment.value, message.id, index, contentColor)}
           </Box>
         )
       )}

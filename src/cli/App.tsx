@@ -13,7 +13,7 @@ import {
   TokiHeader,
   TuiMessage
 } from "@toki/tui";
-import { TokiEngine } from "../core/engine.js";
+import { TokiEngine } from "@toki/coding-agent";
 import { buildBuiltinCommands } from "../commands/builtins.js";
 import { CommandContext, SecretPrompt, SelectionPrompt } from "../commands/types.js";
 import { CommandRegistry } from "../commands/registry.js";
@@ -66,6 +66,7 @@ function fuzzyScore(candidateRaw: string, queryRaw: string): number | null {
 export function App({ engine }: AppProps) {
   const { exit } = useApp();
   const [input, setInput] = useState("");
+  const [inputResetVersion, setInputResetVersion] = useState(0);
   const [busy, setBusy] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [messages, setMessages] = useState<TuiMessage[]>([]);
@@ -79,6 +80,11 @@ export function App({ engine }: AppProps) {
   const [commandSuggestionIndex, setCommandSuggestionIndex] = useState(0);
   const [onboardingActive, setOnboardingActive] = useState(engine.providerNeedsCredentials(engine.getCurrentProvider()));
   const [onboardingStarted, setOnboardingStarted] = useState(false);
+
+  function replaceInput(nextValue: string): void {
+    setInput(nextValue);
+    setInputResetVersion((value) => value + 1);
+  }
 
   const commandContext: CommandContext = useMemo(
     () => ({
@@ -284,7 +290,8 @@ export function App({ engine }: AppProps) {
       if (key.tab || inputKey === "\t") {
         const pick = commandSuggestions[commandSuggestionIndex] ?? commandSuggestions[0];
         if (pick) {
-          setInput(`/${pick.id}`);
+          const completed = `/${pick.id}`;
+          replaceInput(completed);
           setCommandSuggestionIndex((idx) => (idx + 1) % commandSuggestions.length);
         }
         return;
@@ -400,7 +407,7 @@ export function App({ engine }: AppProps) {
           }
         ]);
       }
-      setInput("");
+      replaceInput("");
       return;
     }
 
@@ -409,7 +416,7 @@ export function App({ engine }: AppProps) {
       return;
     }
 
-    setInput("");
+    replaceInput("");
     const nextId = messageId + 1;
     setMessageId(nextId);
     setMessages((prev) => [...prev, { id: nextId, speaker: "you", content: trimmed }]);
@@ -507,6 +514,7 @@ export function App({ engine }: AppProps) {
         >
           <Text color={TOKI_THEME.accent}>› </Text>
           <TextInput
+            key={inputResetVersion}
             value={input}
             placeholder={secretPrompt ? "Enter credential..." : 'Try "refactor <filepath>"'}
             onChange={setInput}

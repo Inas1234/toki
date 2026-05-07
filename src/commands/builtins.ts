@@ -1,5 +1,15 @@
 import { CommandContext, CommandHandler, CommandResult } from "./types.js";
 
+function formatTokenCount(tokens: number): string {
+  if (!Number.isFinite(tokens) || tokens <= 0) {
+    return "0t";
+  }
+  if (tokens < 1000) {
+    return `${Math.round(tokens)}t`;
+  }
+  return `${(tokens / 1000).toFixed(1)}k`;
+}
+
 function box(title: string, lines: string[]): string {
   const width = Math.max(title.length + 4, ...lines.map((line) => line.length + 2), 30);
   const top = `+-- ${title} ${"-".repeat(Math.max(1, width - title.length - 5))}+`;
@@ -23,8 +33,8 @@ async function receiptCommand(context: CommandContext): Promise<CommandResult> {
   const lines = [
     `turn: ${receipt.turn}`,
     `mode: ${receipt.mode}`,
-    `used: ${receipt.usedTokens} / ${receipt.ceiling}`,
-    `saved: ~${receipt.savedTokens}`,
+    `used: ${formatTokenCount(receipt.usedTokens)} / ${formatTokenCount(receipt.ceiling)}`,
+    `saved: ~${formatTokenCount(receipt.savedTokens)}`,
     `loaded: ${receipt.loaded.length}`,
     `skipped: ${receipt.skipped.length}`,
     `compressed: ${receipt.compressed.length}`,
@@ -88,7 +98,7 @@ export function buildBuiltinCommands(getAllHandlers: () => CommandHandler[]): Co
         const summary = context.getBudgetSummary();
         return {
           handled: true,
-          output: box("Budget", [`mode: ${summary.mode}`, `used: ${summary.used}`, `ceiling: ${summary.ceiling}`])
+          output: box("Budget", [`mode: ${summary.mode}`, `used: ${formatTokenCount(summary.used)}`, `ceiling: ${formatTokenCount(summary.ceiling)}`])
         };
       }
     },

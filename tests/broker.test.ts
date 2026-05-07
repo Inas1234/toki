@@ -113,4 +113,117 @@ describe("ContextBroker", () => {
 
     await fs.rm(tmp, { recursive: true, force: true });
   });
+
+  test("materializes code content for explicit edit targets instead of symbol-only summaries", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "toki-broker-edit-"));
+    await fs.mkdir(path.join(tmp, ".toki", "index"), { recursive: true });
+    await fs.mkdir(path.join(tmp, "src"), { recursive: true });
+    await fs.writeFile(
+      path.join(tmp, "src", "auth.ts"),
+      "export class AuthService {\n  login() {\n    return true;\n  }\n}\n",
+      "utf8"
+    );
+
+    const repoConfig: RepoConfig = {
+      repoType: "generic",
+      testCommand: "npm test",
+      generatedPaths: ["node_modules", "dist", ".git", ".toki/index"],
+      importantPaths: []
+    };
+    const globalConfig: GlobalConfig = {
+      defaultModel: "llama-3.1-nemotron-ultra",
+      defaultProvider: "nim",
+      mode: "normal",
+      showReceipts: true,
+      providerApiKeys: {},
+      budget: {
+        tinyCeiling: 4000,
+        normalCeiling: 12000,
+        deepCeiling: 24000
+      },
+      runtime: {
+        modelRoundTimeoutMs: 45000,
+        modelRoundRetries: 2,
+        modelRoundRetryBackoffMs: 1000,
+        maxToolRounds: 6,
+        editToolCallRetries: 2
+      }
+    };
+
+    const graph = new ContextGraph(tmp, repoConfig, path.join(tmp, ".toki", "index"));
+    await graph.initialize();
+    await graph.waitForIndexing();
+    const broker = new ContextBroker("normal");
+    const frame = buildTaskFrame("Fix src/auth.ts so AuthService login returns false");
+    const result = await broker.selectContext(1, frame, graph, globalConfig);
+    const authItem = result.items.find((item) => item.path === "src/auth.ts");
+
+    expect(authItem).toBeDefined();
+    expect(authItem?.representation).not.toBe("symbols");
+    expect(authItem?.content).toContain("AuthService");
+    expect(authItem?.content).toContain("login");
+
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
+  test("prefers agent internals over pasted transcript targets for debugging requests", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "toki-broker-agent-"));
+    await fs.mkdir(path.join(tmp, ".toki", "index"), { recursive: true });
+    await fs.mkdir(path.join(tmp, "src", "core"), { recursive: true });
+    await fs.mkdir(path.join(tmp, "src", "cli"), { recursive: true });
+    await fs.mkdir(path.join(tmp, "packages", "tui", "src"), { recursive: true });
+    await fs.writeFile(path.join(tmp, "src", "core", "engine.ts"), "export class TokiEngine { runTurn() {} }\n", "utf8");
+    await fs.writeFile(path.join(tmp, "src", "core", "toolCalls.ts"), "export function parseToolCallsFromText() {}\n", "utf8");
+    await fs.writeFile(path.join(tmp, "src", "core", "broker.ts"), "export class ContextBroker {}\n", "utf8");
+    await fs.writeFile(path.join(tmp, "src", "cli", "App.tsx"), "export function App() { return null; }\n", "utf8");
+    await fs.writeFile(path.join(tmp, "packages", "tui", "src", "index.tsx"), "export const SlashAutocomplete = () => null;\n", "utf8");
+
+    const repoConfig: RepoConfig = {
+      repoType: "generic",
+      testCommand: "npm test",
+      generatedPaths: ["node_modules", "dist", ".git", ".toki/index"],
+      importantPaths: []
+    };
+    const globalConfig: GlobalConfig = {
+      defaultModel: "llama-3.1-nemotron-ultra",
+      defaultProvider: "nim",
+      mode: "normal",
+      showReceipts: true,
+      providerApiKeys: {},
+      budget: {
+        tinyCeiling: 4000,
+        normalCeiling: 12000,
+        deepCeiling: 24000
+      },
+      runtime: {
+        modelRoundTimeoutMs: 45000,
+        modelRoundRetries: 2,
+        modelRoundRetryBackoffMs: 1000,
+        maxToolRounds: 6,
+        editToolCallRetries: 2
+      }
+    };
+
+    const graph = new ContextGraph(tmp, repoConfig, path.join(tmp, ".toki", "index"));
+    await graph.initialize();
+    await graph.waitForIndexing();
+    const broker = new ContextBroker("normal");
+    const frame = buildTaskFrame(
+      [
+        'SEARCH(packages/tui/src, "tab completion cursor")',
+        "READ(src/cli/App.tsx)",
+        "",
+        "Check exactly what is causing my agent to fail to search the codebase and fix it.",
+        "Ignore the cursor stuff. That is just an example."
+      ].join("\n")
+    );
+    const result = await broker.selectContext(1, frame, graph, globalConfig);
+    const loadedPaths = result.items.map((item) => item.path);
+
+    expect(loadedPaths).toContain("src/core/engine.ts");
+    expect(loadedPaths.some((value) => value?.startsWith("src/core/") && value !== "src/core/engine.ts")).toBe(true);
+    expect(loadedPaths).not.toContain("src/cli/App.tsx");
+
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
 });

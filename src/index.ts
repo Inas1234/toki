@@ -3,8 +3,8 @@ import path from "node:path";
 import { Command } from "commander";
 import React from "react";
 import { render } from "ink";
+import { TokiEngine } from "@toki/coding-agent";
 import { App } from "./cli/App.js";
-import { TokiEngine } from "./core/engine.js";
 
 async function run(): Promise<void> {
   const program = new Command();
