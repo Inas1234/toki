@@ -1,0 +1,372 @@
+import { z } from "zod";
+
+export type ToolName =
+  | "read_file"
+  | "list_files"
+  | "search_files"
+  | "write_file"
+  | "append_file"
+  | "replace_in_file";
+
+export interface ToolCall {
+  tool: ToolName;
+  path?: string | undefined;
+  content?: string | undefined;
+  find?: string | undefined;
+  replace?: string | undefined;
+  query?: string | undefined;
+  max_results?: number | undefined;
+  start_line?: number | undefined;
+  end_line?: number | undefined;
+}
+
+const TOOL_NAME_MAP: Record<string, ToolName> = {
+  read: "read_file",
+  read_file: "read_file",
+  readfile: "read_file",
+  file_read: "read_file",
+  list: "list_files",
+  list_files: "list_files",
+  listfiles: "list_files",
+  ls_files: "list_files",
+  search: "search_files",
+  search_files: "search_files",
+  searchfiles: "search_files",
+  grep: "search_files",
+  find_in_files: "search_files",
+  write: "write_file",
+  write_file: "write_file",
+  writefile: "write_file",
+  create_file: "write_file",
+  append: "append_file",
+  append_file: "append_file",
+  appendfile: "append_file",
+  replace: "replace_in_file",
+  replace_in_file: "replace_in_file",
+  replaceinfile: "replace_in_file",
+  edit_file: "replace_in_file",
+  update_file: "replace_in_file"
+};
+
+const toolCallSchema = z
+  .object({
+    tool: z.enum(["read_file", "list_files", "search_files", "write_file", "append_file", "replace_in_file"]),
+    path: z.string().optional(),
+    content: z.string().optional(),
+    find: z.string().optional(),
+    replace: z.string().optional(),
+    query: z.string().optional(),
+    max_results: z.number().int().positive().optional(),
+    start_line: z.number().int().positive().optional(),
+    end_line: z.number().int().positive().optional()
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if ((value.tool === "write_file" || value.tool === "append_file" || value.tool === "replace_in_file") && !value.path) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${value.tool} requires path`
+      });
+    }
+    if ((value.tool === "write_file" || value.tool === "append_file") && typeof value.content !== "string") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${value.tool} requires content`
+      });
+    }
+    if (value.tool === "replace_in_file" && (typeof value.find !== "string" || typeof value.replace !== "string")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "replace_in_file requires find and replace"
+      });
+    }
+    if (value.tool === "search_files" && (typeof value.query !== "string" || value.query.trim().length === 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "search_files requires query"
+      });
+    }
+    if (typeof value.start_line === "number" && typeof value.end_line === "number" && value.start_line > value.end_line) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "start_line must be <= end_line"
+      });
+    }
+  });
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function parseJsonObjectString(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!(trimmed.startsWith("{") && trimmed.endsWith("}"))) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return asRecord(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function toStringValue(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function toIntValue(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return Math.trunc(value);
+    }
+    if (typeof value === "string" && value.trim().length > 0) {
+      const parsed = Number.parseInt(value, 10);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  return undefined;
+}
+
+function canonicalToolName(value: unknown): ToolName | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return TOOL_NAME_MAP[normalized] ?? null;
+}
+
+function extractSegmentBodies(text: string): string[] {
+  const out: string[] = [];
+
+  const wrapped = [...text.matchAll(/<tool_calls>\s*([\s\S]*?)\s*<\/tool_calls>/gi)];
+  for (const match of wrapped) {
+    if (match[1]) {
+      out.push(match[1]);
+    }
+  }
+
+  const singleBlocks = [...text.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi)];
+  for (const match of singleBlocks) {
+    if (match[1]) {
+      out.push(match[1]);
+    }
+  }
+
+  if (out.length === 0) {
+    out.push(text);
+  }
+  return out;
+}
+
+function normalizeToolJson(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const candidate = (fenced?.[1] ?? trimmed).trim();
+  if (candidate.startsWith("[") || candidate.startsWith("{")) {
+    return candidate;
+  }
+  const embeddedJson = candidate.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
+  if (embeddedJson?.[1]) {
+    return embeddedJson[1].trim();
+  }
+  return null;
+}
+
+function readBalancedJson(text: string, start: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i]!;
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+    if (ch === "{" || ch === "[") {
+      depth += 1;
+      continue;
+    }
+    if (ch === "}" || ch === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+      if (depth < 0) {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+function extractJsonCandidates(raw: string): string[] {
+  const out: string[] = [];
+  const normalized = normalizeToolJson(raw);
+  if (normalized) {
+    out.push(normalized);
+  }
+
+  const text = raw.trim();
+  const starts: number[] = [];
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === "{" || ch === "[") {
+      starts.push(i);
+    }
+  }
+
+  for (const start of starts) {
+    const candidate = readBalancedJson(text, start);
+    if (candidate && !out.includes(candidate)) {
+      out.push(candidate);
+    }
+    if (out.length >= 48) {
+      break;
+    }
+  }
+
+  return out;
+}
+
+function flattenRoot(value: unknown): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  const objectValue = asRecord(value);
+  if (!objectValue) {
+    return [];
+  }
+  if (Array.isArray(objectValue.tool_calls)) {
+    return objectValue.tool_calls;
+  }
+  if (Array.isArray(objectValue.calls)) {
+    return objectValue.calls;
+  }
+  return [objectValue];
+}
+
+function normalizeRawCall(raw: unknown): ToolCall | null {
+  const root = asRecord(raw);
+  if (!root) {
+    return null;
+  }
+
+  const fnRecord = asRecord(root.function);
+  const nestedArgs =
+    parseJsonObjectString(root.arguments) ??
+    asRecord(root.arguments) ??
+    parseJsonObjectString(root.args) ??
+    asRecord(root.args) ??
+    parseJsonObjectString(root.input) ??
+    asRecord(root.input) ??
+    parseJsonObjectString(root.parameters) ??
+    asRecord(root.parameters) ??
+    parseJsonObjectString(fnRecord?.arguments) ??
+    asRecord(fnRecord?.arguments) ??
+    parseJsonObjectString(fnRecord?.args) ??
+    asRecord(fnRecord?.args) ??
+    parseJsonObjectString(fnRecord?.input) ??
+    asRecord(fnRecord?.input) ??
+    parseJsonObjectString(fnRecord?.parameters) ??
+    asRecord(fnRecord?.parameters) ??
+    {};
+
+  const direct = {
+    ...nestedArgs,
+    ...root,
+    ...(fnRecord ?? {})
+  };
+
+  const tool = canonicalToolName(root.tool ?? root.name ?? fnRecord?.name);
+  if (!tool) {
+    return null;
+  }
+
+  const normalized: ToolCall = {
+    tool,
+    path: toStringValue(direct.path, direct.file, direct.filepath, direct.file_path),
+    content: toStringValue(direct.content, direct.text),
+    find: toStringValue(direct.find, direct.old, direct.search_text),
+    replace: toStringValue(direct.replace, direct.new, direct.replacement, direct.replace_text),
+    query: toStringValue(direct.query, direct.search, direct.pattern),
+    max_results: toIntValue(direct.max_results, direct.maxResults, direct.limit),
+    start_line: toIntValue(direct.start_line, direct.startLine, direct.line_start),
+    end_line: toIntValue(direct.end_line, direct.endLine, direct.line_end)
+  };
+
+  const parsed = toolCallSchema.safeParse(normalized);
+  if (!parsed.success) {
+    return null;
+  }
+  return parsed.data;
+}
+
+export function parseToolCallsFromText(text: string): ToolCall[] {
+  const valid: ToolCall[] = [];
+  const seen = new Set<string>();
+  const segments = extractSegmentBodies(text);
+
+  for (const segment of segments) {
+    const candidates = extractJsonCandidates(segment);
+    for (const candidate of candidates) {
+      let parsedRoot: unknown;
+      try {
+        parsedRoot = JSON.parse(candidate) as unknown;
+      } catch {
+        continue;
+      }
+
+      const flat = flattenRoot(parsedRoot);
+      for (const entry of flat) {
+        const normalized = normalizeRawCall(entry);
+        if (!normalized) {
+          continue;
+        }
+        const hash = JSON.stringify(normalized);
+        if (seen.has(hash)) {
+          continue;
+        }
+        seen.add(hash);
+        valid.push(normalized);
+        if (valid.length >= 16) {
+          return valid;
+        }
+      }
+    }
+  }
+
+  return valid;
+}

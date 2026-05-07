@@ -1,0 +1,4 @@
+repo_type = "generic"
+test_command = "npm test"
+generated_paths = [ "dist", "node_modules", ".git", ".toki/index" ]
+important_paths = [ ]
