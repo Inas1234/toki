@@ -108,6 +108,7 @@ export function App({ engine }: AppProps) {
         setHeader(engine.getHeaderInfo());
       },
       listModels: () => engine.listModels(),
+      getProviderUsage: () => engine.getCurrentProviderUsage(),
       getCurrentProvider: () => engine.getCurrentProvider(),
       listProviders: () => engine.listProviders(),
       switchProvider: async (providerId: string) => {

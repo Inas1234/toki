@@ -31,6 +31,16 @@ export interface CommandContext {
   getCurrentModel(): string;
   setModel(model: string): Promise<void>;
   listModels(): Promise<ModelInfo[]>;
+  getProviderUsage(): Promise<{
+    providerId?: string;
+    endpoint?: string;
+    planName?: string;
+    usedTokens?: number;
+    usedDollars?: number;
+    remainingTokens?: number;
+    remainingDollars?: number;
+    resetAt?: string;
+  }>;
   getCurrentProvider(): string;
   listProviders(): Array<{ id: string; name: string; configured: boolean }>;
   switchProvider(providerId: string): Promise<void>;

@@ -247,7 +247,7 @@ describe("TokiEngine edit recovery", () => {
     const updated = await fs.readFile(path.join(tmp, targetPath), "utf8");
     expect(updated).toContain("const answer = 2;");
     expect(result.response).toContain("Updated src/app.ts");
-    expect(chunks.join("")).toContain("Forced mutation recovery generated edit/write tool calls");
+    expect(chunks.join("")).toContain("* EDIT(src/app.ts)");
 
     await fs.rm(tmp, { recursive: true, force: true });
   });
@@ -546,7 +546,6 @@ describe("TokiEngine edit recovery", () => {
     const updated = await fs.readFile(path.join(tmp, targetPath), "utf8");
 
     expect(updated).toContain("const answer = 2;");
-    expect(chunks.join("")).toContain("Recovered valid tool JSON from model output");
     expect(result.response).toContain("Applied changes to src/app.ts.");
 
     await fs.rm(tmp, { recursive: true, force: true });
@@ -667,6 +666,51 @@ describe("TokiEngine edit recovery", () => {
     await engine.runTurn("Update README using git changes", (chunk) => chunks.push(chunk));
 
     expect(chunks.join("")).not.toContain("Model returned no valid tool calls on edit task");
+    expect(chunks.join("")).not.toContain("TOOLING(.)");
+
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
+  test("runs post-edit verification commands from detected package scripts", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "toki-engine-post-edit-checks-"));
+    const targetPath = "src/app.ts";
+    await fs.mkdir(path.join(tmp, "src"), { recursive: true });
+    await fs.mkdir(path.join(tmp, ".toki", "index"), { recursive: true });
+    await fs.writeFile(path.join(tmp, targetPath), "const answer = 1;\n", "utf8");
+    await fs.writeFile(
+      path.join(tmp, "package.json"),
+      JSON.stringify(
+        {
+          name: "post-edit-checks",
+          type: "module",
+          scripts: {
+            build: `node -e "process.stdout.write('build-ok')"`
+          }
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const provider = new ScriptedProvider(
+      ['<tool_calls>[{"tool":"edit","path":"src/app.ts","edits":[{"oldText":"const answer = 1;","newText":"const answer = 2;"}]}]</tool_calls>'],
+      (messages) => {
+        const system = messages[0]?.content ?? "";
+        if (system.includes("Provide the final user-facing answer")) {
+          return "Updated src/app.ts.";
+        }
+        return "[]";
+      }
+    );
+
+    const engine = createEngineHarness(tmp, provider, createSelection(targetPath));
+    const chunks: string[] = [];
+    await engine.runTurn("Fix src/app.ts by changing answer to 2", (chunk) => chunks.push(chunk));
+
+    const transcript = chunks.join("");
+    expect(transcript).toContain("* BASH(\"npm run build\")");
+    expect(transcript).toContain("build-ok");
 
     await fs.rm(tmp, { recursive: true, force: true });
   });

@@ -104,6 +104,8 @@ export interface RuntimeSettings {
   modelRoundRetryBackoffMs: number;
   maxToolRounds: number;
   editToolCallRetries: number;
+  autoRunChecksAfterEdit?: boolean;
+  autoRunChecksTimeoutSec?: number;
 }
 
 export interface GlobalConfig {
@@ -121,6 +123,7 @@ export interface RepoConfig {
   testCommand: string;
   generatedPaths: string[];
   importantPaths: string[];
+  postEditChecks?: string[];
 }
 
 export interface ProviderChatMessage {

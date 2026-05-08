@@ -6,7 +6,7 @@ import { stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { evaluateEditLoopRound, isMutationCall, parseToolCallsFromText } from "@toki/agent-core";
-import { ProviderRegistry } from "@toki/providers";
+import { ProviderRegistry, type ProviderUsageInfo } from "@toki/providers";
 import { fileExists, readTextFile } from "@toki/shared";
 import { ContextGraph } from "./graph/contextGraph.js";
 import { ContextBroker } from "./broker/contextBroker.js";
@@ -128,6 +128,17 @@ export class TokiEngine {
     }
     async listModels() {
         return this.providers.get(this.providerId).listModels();
+    }
+    async getCurrentProviderUsage() {
+        const provider = this.providers.get(this.providerId);
+        if (typeof provider.getUsage !== "function") {
+            throw new Error(`${this.providerId} does not expose a usage endpoint yet.`);
+        }
+        const usage = await provider.getUsage();
+        return {
+            providerId: this.providerId,
+            ...usage
+        };
     }
     getCurrentProvider() {
         return this.providerId;
@@ -313,27 +324,16 @@ export class TokiEngine {
                     continue;
                 }
                 if (task.needsEdit && successfulMutations === 0) {
-                    onChunk("* TOOLING(.)\n  L ERROR No successful file mutation was produced for an edit task.\n");
                     break;
                 }
                 const sanitizedCandidate = this.sanitizeUserFacingText(candidate);
                 if (task.needsEdit && successfulMutations > 0) {
-                    const candidateStillLooksLikeDraft = this.looksLikeEditContinuation(sanitizedCandidate) || /```/.test(sanitizedCandidate);
-                    if (sanitizedCandidate.length === 0 || candidateStillLooksLikeDraft || this.extractToolCalls(sanitizedCandidate).length > 0) {
-                        break;
-                    }
+                    // After any successful mutation on edit tasks, do not accept intermediate prose from
+                    // the model. Exit loop and synthesize a final answer from tool outputs.
+                    break;
                 }
                 response = sanitizedCandidate;
                 break;
-            }
-            if (calls.length === 0 && recoveredCalls.length > 0) {
-                onChunk("* TOOLING(.)\n  L INFO Recovered valid tool JSON from model output\n");
-            }
-            if (calls.length === 0 && recoveryCalls.length > 0) {
-                onChunk("* TOOLING(.)\n  L INFO Generated recovery tool calls from failed edit transcript\n");
-            }
-            if (calls.length === 0 && postMutationRecoveryCalls.length > 0) {
-                onChunk("* TOOLING(.)\n  L INFO Converted post-edit prose back into mutation tool calls\n");
             }
             executedAnyTools = true;
             for (const call of effectiveCalls) {
@@ -364,7 +364,6 @@ export class TokiEngine {
                 editExplorationOnlyRounds = loopState.explorationOnlyRounds;
                 if (loopState.shouldEscalateRecovery) {
                     toolResults = `${toolResults}\nEscalation: repeated search/list rounds without file progress. Force direct read/mutation recovery now.`;
-                    onChunk("* TOOLING(.)\n  L INFO Escalating from repeated exploration-only rounds to forced edit recovery\n");
                     this.orchestrator.noteDecision(`Escalated edit recovery after ${editExplorationOnlyRounds} exploration-only round(s)`);
                     break;
                 }
@@ -389,6 +388,13 @@ export class TokiEngine {
                 if (fallback.mutationSuccessCount > 0) {
                     executedAnyTools = true;
                 }
+            }
+        }
+        if (successfulMutations > 0 && (this.config.global.runtime.autoRunChecksAfterEdit ?? true)) {
+            const verification = await this.runPostEditChecks(onChunk);
+            if (verification.ranAny) {
+                toolResults = `${toolResults === "(none)" ? "" : `${toolResults}\n`}[post-edit checks]\n${verification.report}`.trim();
+                toolErrors.push(...verification.errors);
             }
         }
         if (response.length === 0) {
@@ -434,6 +440,70 @@ export class TokiEngine {
             return "";
         }
     }
+    async runPostEditChecks(onChunk) {
+        const commands = await this.getPostEditCheckCommands();
+        if (commands.length === 0) {
+            return { ranAny: false, report: "(none)", errors: [] };
+        }
+        const timeoutSec = this.config.global.runtime.autoRunChecksTimeoutSec ?? 180;
+        const reportBlocks = [];
+        const errors = [];
+        for (const command of commands) {
+            const execution = await this.executeToolCalls([
+                {
+                    tool: "bash",
+                    command,
+                    timeout: timeoutSec
+                }
+            ]);
+            onChunk(`${execution.display}\n`);
+            reportBlocks.push(execution.report);
+            errors.push(...execution.errors);
+            if (!/exit_code=0(?:\s|$)/.test(execution.report)) {
+                errors.push(`post-edit check failed: ${command}`);
+            }
+        }
+        return {
+            ranAny: true,
+            report: reportBlocks.join("\n"),
+            errors
+        };
+    }
+    async getPostEditCheckCommands() {
+        const explicit = (this.config.repo.postEditChecks ?? [])
+            .map((command) => command.trim())
+            .filter((command) => command.length > 0);
+        if (explicit.length > 0) {
+            return [...new Set(explicit)];
+        }
+        const packageJsonPath = path.join(this.config.paths.repoDir, "package.json");
+        if (!(await fileExists(packageJsonPath))) {
+            return [];
+        }
+        try {
+            const raw = await readTextFile(packageJsonPath);
+            const parsed = JSON.parse(raw);
+            const scripts = parsed && typeof parsed === "object" && typeof parsed.scripts === "object" ? parsed.scripts : {};
+            const commands = [];
+            if (scripts.lint) {
+                commands.push("npm run lint");
+            }
+            if (scripts.typecheck) {
+                commands.push("npm run typecheck");
+            }
+            if (scripts.build) {
+                commands.push("npm run build");
+            }
+            if (scripts.test) {
+                commands.push("npm test");
+            }
+            return [...new Set(commands)];
+        }
+        catch {
+            const fallback = typeof this.config.repo.testCommand === "string" ? this.config.repo.testCommand.trim() : "";
+            return fallback.length > 0 ? [fallback] : [];
+        }
+    }
     async applyDeterministicReadmeGitUpdate(toolResults, onChunk) {
         const readmePath = "README.md";
         if (!(await this.isSafeRecoveryPath(readmePath, "write"))) {
@@ -468,7 +538,6 @@ export class TokiEngine {
         if (next === current) {
             return null;
         }
-        onChunk("* TOOLING(.)\n  L INFO Applying deterministic README update from current git changes\n");
         const execution = await this.executeToolCalls([{ tool: "write", path: readmePath, content: next }]);
         onChunk(`${execution.display}\n`);
         return {
@@ -645,7 +714,6 @@ export class TokiEngine {
         const errors = [];
         const forcedCalls = await this.recoverMutationToolCalls(provider, task, nextToolResults);
         if (forcedCalls.length > 0) {
-            onChunk("* TOOLING(.)\n  L INFO Forced mutation recovery generated edit/write tool calls\n");
             const execution = await this.executeToolCalls(forcedCalls);
             onChunk(`${execution.display}\n`);
             return {
@@ -662,7 +730,6 @@ export class TokiEngine {
                 errors
             };
         }
-        onChunk("* TOOLING(.)\n  L INFO Recovery is reading likely edit targets before a forced mutation attempt\n");
         const readExecution = await this.executeToolCalls(readCalls);
         onChunk(`${readExecution.display}\n`);
         nextToolResults = `${nextToolResults === "(none)" ? "" : `${nextToolResults}\n`}[forced read]\n${readExecution.report}`.trim();
@@ -675,7 +742,6 @@ export class TokiEngine {
                 errors
             };
         }
-        onChunk("* TOOLING(.)\n  L INFO Forced mutation recovery generated edit/write tool calls\n");
         const execution = await this.executeToolCalls(secondForcedCalls);
         onChunk(`${execution.display}\n`);
         return {

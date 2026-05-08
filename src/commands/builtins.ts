@@ -18,6 +18,13 @@ function box(title: string, lines: string[]): string {
   return `${top}\n${body}\n${bottom}`;
 }
 
+function formatMoney(value: number | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "(n/a)";
+  }
+  return `$${value.toFixed(4)}`;
+}
+
 async function receiptCommand(context: CommandContext): Promise<CommandResult> {
   const receipt = context.getReceipt();
   if (!receipt) {
@@ -100,6 +107,30 @@ export function buildBuiltinCommands(getAllHandlers: () => CommandHandler[]): Co
           handled: true,
           output: box("Budget", [`mode: ${summary.mode}`, `used: ${formatTokenCount(summary.used)}`, `ceiling: ${formatTokenCount(summary.ceiling)}`])
         };
+      }
+    },
+    {
+      name: "usage",
+      description: "Show provider account usage/quota when supported",
+      usage: "/usage",
+      run: async (_args, context) => {
+        try {
+          const usage = await context.getProviderUsage();
+          const lines = [
+            `provider: ${usage.providerId ?? context.getCurrentProvider()}`,
+            `plan: ${usage.planName ?? "(n/a)"}`,
+            `used tokens: ${usage.usedTokens?.toLocaleString() ?? "(n/a)"}`,
+            `remaining tokens: ${usage.remainingTokens?.toLocaleString() ?? "(n/a)"}`,
+            `used dollars: ${formatMoney(usage.usedDollars)}`,
+            `remaining dollars: ${formatMoney(usage.remainingDollars)}`,
+            `reset at: ${usage.resetAt ?? "(n/a)"}`,
+            `endpoint: ${usage.endpoint ?? "(n/a)"}`
+          ];
+          return { handled: true, output: box("Usage", lines) };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Usage lookup failed.";
+          return { handled: true, output: box("Usage", [message]), error: true };
+        }
       }
     },
     {

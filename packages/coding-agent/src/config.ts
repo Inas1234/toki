@@ -49,14 +49,18 @@ const globalSchema = z.object({
       model_round_retries: z.number().int().min(0).default(2),
       model_round_retry_backoff_ms: z.number().int().positive().default(1000),
       max_tool_rounds: z.number().int().positive().default(8),
-      edit_tool_call_retries: z.number().int().min(0).default(4)
+      edit_tool_call_retries: z.number().int().min(0).default(4),
+      auto_run_checks_after_edit: z.boolean().default(true),
+      auto_run_checks_timeout_sec: z.number().int().positive().default(180)
     })
     .default({
       model_round_timeout_ms: 45000,
       model_round_retries: 2,
       model_round_retry_backoff_ms: 1000,
       max_tool_rounds: 8,
-      edit_tool_call_retries: 4
+      edit_tool_call_retries: 4,
+      auto_run_checks_after_edit: true,
+      auto_run_checks_timeout_sec: 180
     })
 });
 
@@ -64,7 +68,8 @@ const repoSchema = z.object({
   repo_type: z.string().default("generic"),
   test_command: z.string().default("npm test"),
   generated_paths: z.array(z.string()).default(["dist", "node_modules", ".git"]),
-  important_paths: z.array(z.string()).default([])
+  important_paths: z.array(z.string()).default([]),
+  post_edit_checks: z.array(z.string()).default([])
 });
 
 export interface ResolvedConfig {
@@ -96,7 +101,9 @@ function rawGlobalDefaults(): z.input<typeof globalSchema> {
       model_round_retries: 2,
       model_round_retry_backoff_ms: 1000,
       max_tool_rounds: 8,
-      edit_tool_call_retries: 4
+      edit_tool_call_retries: 4,
+      auto_run_checks_after_edit: true,
+      auto_run_checks_timeout_sec: 180
     }
   };
 }
@@ -106,7 +113,8 @@ function rawRepoDefaults(): z.input<typeof repoSchema> {
     repo_type: "generic",
     test_command: "npm test",
     generated_paths: ["dist", "node_modules", ".git", ".toki/index"],
-    important_paths: []
+    important_paths: [],
+    post_edit_checks: []
   };
 }
 
@@ -140,7 +148,9 @@ function toGlobalConfig(raw: z.infer<typeof globalSchema>): GlobalConfig {
       modelRoundRetries: raw.runtime.model_round_retries,
       modelRoundRetryBackoffMs: raw.runtime.model_round_retry_backoff_ms,
       maxToolRounds: raw.runtime.max_tool_rounds,
-      editToolCallRetries: raw.runtime.edit_tool_call_retries
+      editToolCallRetries: raw.runtime.edit_tool_call_retries,
+      autoRunChecksAfterEdit: raw.runtime.auto_run_checks_after_edit,
+      autoRunChecksTimeoutSec: raw.runtime.auto_run_checks_timeout_sec
     }
   };
   return base;
@@ -151,7 +161,8 @@ function toRepoConfig(raw: z.infer<typeof repoSchema>): RepoConfig {
     repoType: raw.repo_type,
     testCommand: raw.test_command,
     generatedPaths: raw.generated_paths,
-    importantPaths: raw.important_paths
+    importantPaths: raw.important_paths,
+    postEditChecks: raw.post_edit_checks
   };
 }
 
@@ -178,7 +189,9 @@ function toRawGlobalConfig(config: GlobalConfig): z.input<typeof globalSchema> {
       model_round_retries: config.runtime.modelRoundRetries,
       model_round_retry_backoff_ms: config.runtime.modelRoundRetryBackoffMs,
       max_tool_rounds: config.runtime.maxToolRounds,
-      edit_tool_call_retries: config.runtime.editToolCallRetries
+      edit_tool_call_retries: config.runtime.editToolCallRetries,
+      auto_run_checks_after_edit: config.runtime.autoRunChecksAfterEdit ?? true,
+      auto_run_checks_timeout_sec: config.runtime.autoRunChecksTimeoutSec ?? 180
     },
     providers: {}
   };

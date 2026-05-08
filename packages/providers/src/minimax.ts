@@ -1,5 +1,5 @@
 import { ChatChunk, ChatResult, ModelInfo, ProviderChatMessage, ProviderChatOptions, estimateTokens } from "@toki/shared";
-import { ModelProvider } from "./base.js";
+import { ModelProvider, ProviderUsageInfo } from "./base.js";
 
 interface MiniMaxProviderOptions {
   apiKey?: string;
@@ -28,6 +28,31 @@ interface MiniMaxModelsResponse {
 }
 
 const DEFAULT_BASE_URL = "https://api.minimax.io/v1";
+
+interface MiniMaxUsageResponse {
+  usage?: {
+    total_tokens?: number;
+    used_tokens?: number;
+  };
+  remaining?: {
+    tokens?: number;
+  };
+  group_info?: {
+    used_dollars?: number;
+    remaining_dollars?: number;
+  };
+  model_remains?: Array<{
+    model_name?: string;
+    remaining_tokens?: number;
+    used_tokens?: number;
+    start_time?: string | number;
+    end_time?: string | number;
+  }>;
+  plan_name?: string;
+  subscription_name?: string;
+  reset_at?: string | number;
+  end_time?: string | number;
+}
 const DOCUMENTED_MODELS = [
   "MiniMax-M2.7",
   "MiniMax-M2.7-highspeed",
@@ -239,5 +264,98 @@ export class MiniMaxProvider implements ModelProvider {
 
   public estimateTokens(text: string): number {
     return estimateTokens(text);
+  }
+
+  public async getUsage(): Promise<ProviderUsageInfo> {
+    const apiKey = this.requireApiKey();
+    const endpoints = ["/token_plan/remains", "/api/openplatform/coding_plan/remains"];
+    let lastError = "Unknown usage endpoint error";
+
+    for (const endpoint of endpoints) {
+      try {
+        const response = await fetch(`${this.baseUrl}${endpoint}`, {
+          method: "GET",
+          headers: this.getHeaders(apiKey)
+        });
+        if (!response.ok) {
+          lastError = `MiniMax usage failed (${response.status})`;
+          continue;
+        }
+        const payload = (await response.json()) as MiniMaxUsageResponse;
+        const usage = this.parseUsagePayload(payload);
+        return {
+          providerId: this.id,
+          endpoint: endpoint,
+          ...usage
+        };
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+    }
+
+    throw new Error(`MiniMax usage unavailable: ${lastError}`);
+  }
+
+  private parseUsagePayload(payload: MiniMaxUsageResponse): ProviderUsageInfo {
+    const modelRemains = Array.isArray(payload.model_remains) ? payload.model_remains : [];
+    const aggregateRemaining = modelRemains.reduce((sum, item) => sum + (this.toNumber(item.remaining_tokens) ?? 0), 0);
+    const aggregateUsed = modelRemains.reduce((sum, item) => sum + (this.toNumber(item.used_tokens) ?? 0), 0);
+    const planName =
+      payload.plan_name ??
+      payload.subscription_name ??
+      modelRemains[0]?.model_name;
+
+    const resetRaw = payload.reset_at ?? payload.end_time ?? modelRemains[0]?.end_time;
+    const usedTokens = this.toNumber(payload.usage?.used_tokens) ?? this.toNumber(payload.usage?.total_tokens) ?? (aggregateUsed > 0 ? aggregateUsed : undefined);
+    const remainingTokens = this.toNumber(payload.remaining?.tokens) ?? (aggregateRemaining > 0 ? aggregateRemaining : undefined);
+    const usedDollars = this.toNumber(payload.group_info?.used_dollars);
+    const remainingDollars = this.toNumber(payload.group_info?.remaining_dollars);
+    const resetAt = this.toIsoString(resetRaw);
+    const usage: ProviderUsageInfo = {};
+    if (typeof planName === "string" && planName.length > 0) {
+      usage.planName = planName;
+    }
+    if (typeof usedTokens === "number") {
+      usage.usedTokens = usedTokens;
+    }
+    if (typeof remainingTokens === "number") {
+      usage.remainingTokens = remainingTokens;
+    }
+    if (typeof usedDollars === "number") {
+      usage.usedDollars = usedDollars;
+    }
+    if (typeof remainingDollars === "number") {
+      usage.remainingDollars = remainingDollars;
+    }
+    if (typeof resetAt === "string" && resetAt.length > 0) {
+      usage.resetAt = resetAt;
+    }
+    return usage;
+  }
+
+  private toNumber(value: unknown): number | undefined {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string" && value.trim().length > 0) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return undefined;
+  }
+
+  private toIsoString(value: unknown): string | undefined {
+    if (typeof value === "string") {
+      const asDate = new Date(value);
+      return Number.isNaN(asDate.getTime()) ? value : asDate.toISOString();
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      const ms = value > 10_000_000_000 ? value : value * 1000;
+      const asDate = new Date(ms);
+      return Number.isNaN(asDate.getTime()) ? undefined : asDate.toISOString();
+    }
+    return undefined;
   }
 }
