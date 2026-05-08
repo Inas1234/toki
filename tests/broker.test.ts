@@ -226,4 +226,77 @@ describe("ContextBroker", () => {
 
     await fs.rm(tmp, { recursive: true, force: true });
   });
+
+  test("does not let transcript diff noise pull README into agent-debug context", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "toki-broker-transcript-"));
+    await fs.mkdir(path.join(tmp, ".toki", "index"), { recursive: true });
+    await fs.mkdir(path.join(tmp, "packages", "coding-agent", "src"), { recursive: true });
+    await fs.writeFile(path.join(tmp, "README.md"), "# Demo\n", "utf8");
+    await fs.writeFile(path.join(tmp, "package.json"), JSON.stringify({ name: "demo", type: "module" }), "utf8");
+    await fs.writeFile(
+      path.join(tmp, "packages", "coding-agent", "src", "engine.ts"),
+      "export class TokiEngine { runTurn() {} }\n",
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(tmp, "packages", "coding-agent", "src", "taskFrame.ts"),
+      "export function buildTaskFrame(raw: string) { return raw; }\n",
+      "utf8"
+    );
+
+    const repoConfig: RepoConfig = {
+      repoType: "generic",
+      testCommand: "npm test",
+      generatedPaths: ["node_modules", "dist", ".git", ".toki/index"],
+      importantPaths: []
+    };
+    const globalConfig: GlobalConfig = {
+      defaultModel: "llama-3.1-nemotron-ultra",
+      defaultProvider: "nim",
+      mode: "normal",
+      showReceipts: true,
+      providerApiKeys: {},
+      budget: {
+        tinyCeiling: 4000,
+        normalCeiling: 12000,
+        deepCeiling: 24000
+      },
+      runtime: {
+        modelRoundTimeoutMs: 45000,
+        modelRoundRetries: 2,
+        modelRoundRetryBackoffMs: 1000,
+        maxToolRounds: 6,
+        editToolCallRetries: 2
+      }
+    };
+
+    const graph = new ContextGraph(tmp, repoConfig, path.join(tmp, ".toki", "index"));
+    await graph.initialize();
+    await graph.waitForIndexing();
+    const broker = new ContextBroker("normal");
+    const frame = buildTaskFrame(
+      [
+        "READ(README.md)",
+        "READ(package.json)",
+        "EDIT(README.md)",
+        "--- a/README.md",
+        "+++ b/README.md",
+        "@@ -1,3 +1,3 @@",
+        "- old docs",
+        "+ new docs",
+        "",
+        "Why is this happening i mean why cant it understand the actual context or whatever how does this work in other AI coding agents and why is mine so stupid i dont get it the model i am using isnt bad like it is not the models fault it is the agent fault",
+        "",
+        "implement it"
+      ].join("\n")
+    );
+    const result = await broker.selectContext(1, frame, graph, globalConfig);
+    const loadedPaths = result.items.map((item) => item.path);
+
+    expect(loadedPaths).toContain("packages/coding-agent/src/engine.ts");
+    expect(loadedPaths.some((value) => value?.startsWith("packages/coding-agent/src/"))).toBe(true);
+    expect(loadedPaths).not.toContain("README.md");
+
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
 });

@@ -47,7 +47,7 @@ export function sanitizeRenderableContent(content: string): string {
     .replace(/<tool_calls>[\s\S]*?<\/tool_calls>/gi, "")
     .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "")
     .replace(/\[tool_calls?\][\s\S]*?\[\/tool_calls?\]/gi, "")
-    .replace(/^\s*\{tool:\s*".*$/gim, "")
+    .replace(/^\s*\{\s*"?tool"?\s*:\s*["']?.*$/gim, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -55,25 +55,54 @@ export function sanitizeRenderableContent(content: string): string {
 function parseMarkdown(content: string): MarkdownSegment[] {
   const segments: MarkdownSegment[] = [];
   const sanitizedContent = sanitizeRenderableContent(content);
-  const regex = /```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g;
-  let last = 0;
-  let match = regex.exec(sanitizedContent);
-  while (match) {
-    if (match.index > last) {
-      segments.push({ kind: "text", value: sanitizedContent.slice(last, match.index) });
+  const lines = sanitizedContent.split(/\r?\n/);
+  const textBuffer: string[] = [];
+  let i = 0;
+
+  const flushText = () => {
+    if (textBuffer.length > 0) {
+      segments.push({ kind: "text", value: textBuffer.join("\n") });
+      textBuffer.length = 0;
     }
+  };
+
+  while (i < lines.length) {
+    const line = lines[i] ?? "";
+    const fenceStart = line.match(/^\s{0,3}```([a-zA-Z0-9_-]*)\s*$/);
+    if (!fenceStart) {
+      textBuffer.push(line);
+      i += 1;
+      continue;
+    }
+
+    flushText();
+    const codeLines: string[] = [];
+    let j = i + 1;
+    while (j < lines.length && !/^\s{0,3}```\s*$/.test(lines[j] ?? "")) {
+      codeLines.push(lines[j] ?? "");
+      j += 1;
+    }
+
+    if (j >= lines.length) {
+      // Unclosed fence: treat as plain text.
+      textBuffer.push(line, ...codeLines);
+      break;
+    }
+
     segments.push({
       kind: "code",
-      language: match[1] && match[1].trim().length > 0 ? match[1].trim() : "code",
-      value: (match[2] ?? "").trimEnd()
+      language: fenceStart[1] && fenceStart[1].trim().length > 0 ? fenceStart[1].trim() : "code",
+      value: codeLines.join("\n").trimEnd()
     });
-    last = match.index + match[0].length;
-    match = regex.exec(content);
+    i = j + 1;
   }
-  if (last < sanitizedContent.length) {
-    segments.push({ kind: "text", value: sanitizedContent.slice(last) });
-  }
+
+  flushText();
   return segments.length > 0 ? segments : [{ kind: "text", value: sanitizedContent }];
+}
+
+export function parseMarkdownSegmentsForTest(content: string): { kind: "text" | "code"; language?: string; value: string }[] {
+  return parseMarkdown(content);
 }
 
 function parseInlineMarkdown(line: string): InlineToken[] {
@@ -215,7 +244,7 @@ function renderMarkdownLine(line: string, key: string, baseColor: string): React
   const diffRemoved = line.match(/^\s{2}-\s(.*)$/);
   if (diffRemoved) {
     return (
-      <Text key={key} color="#EF4444">
+      <Text key={key} color="#F59E0B">
         {`  - ${diffRemoved[1] ?? ""}`}
       </Text>
     );

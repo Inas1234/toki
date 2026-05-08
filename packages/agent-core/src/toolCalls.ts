@@ -1,120 +1,111 @@
 import { z } from "zod";
 
-export type ToolName =
-  | "read_file"
-  | "list_files"
-  | "search_files"
-  | "write_file"
-  | "append_file"
-  | "replace_in_file"
-  | "run_command";
+export type ToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls";
 
-export interface ToolCall {
-  tool: ToolName;
-  path?: string | undefined;
-  content?: string | undefined;
-  find?: string | undefined;
-  replace?: string | undefined;
-  query?: string | undefined;
-  max_results?: number | undefined;
-  start_line?: number | undefined;
-  end_line?: number | undefined;
-  command?: string | undefined;
-  cwd?: string | undefined;
-  timeout_ms?: number | undefined;
+export interface EditReplacement {
+  oldText: string;
+  newText: string;
 }
 
+interface BaseToolCall {
+  tool: ToolName;
+  path?: string;
+}
+
+export type ToolCall =
+  | (BaseToolCall & { tool: "read"; path: string; offset?: number; limit?: number })
+  | (BaseToolCall & { tool: "bash"; command: string; timeout?: number })
+  | (BaseToolCall & { tool: "edit"; path: string; edits: EditReplacement[] })
+  | (BaseToolCall & { tool: "write"; path: string; content: string })
+  | (BaseToolCall & {
+      tool: "grep";
+      pattern: string;
+      glob?: string;
+      ignoreCase?: boolean;
+      literal?: boolean;
+      context?: number;
+      limit?: number;
+    })
+  | (BaseToolCall & { tool: "find"; pattern: string; limit?: number })
+  | (BaseToolCall & { tool: "ls"; limit?: number });
+
 const TOOL_NAME_MAP: Record<string, ToolName> = {
-  read: "read_file",
-  read_file: "read_file",
-  readfile: "read_file",
-  file_read: "read_file",
-  list: "list_files",
-  list_files: "list_files",
-  listfiles: "list_files",
-  ls_files: "list_files",
-  search: "search_files",
-  search_files: "search_files",
-  searchfiles: "search_files",
-  grep: "search_files",
-  find_in_files: "search_files",
-  write: "write_file",
-  write_file: "write_file",
-  writefile: "write_file",
-  create_file: "write_file",
-  append: "append_file",
-  append_file: "append_file",
-  appendfile: "append_file",
-  edit: "replace_in_file",
-  replace: "replace_in_file",
-  replace_in_file: "replace_in_file",
-  replaceinfile: "replace_in_file",
-  edit_file: "replace_in_file",
-  update_file: "replace_in_file",
-  shell: "run_command",
-  sh: "run_command",
-  command: "run_command",
-  run: "run_command",
-  run_command: "run_command",
-  runcommand: "run_command",
-  exec: "run_command",
-  execute: "run_command",
-  exec_command: "run_command",
-  execute_command: "run_command"
+  read: "read",
+  read_file: "read",
+  readfile: "read",
+  file_read: "read",
+  bash: "bash",
+  shell: "bash",
+  sh: "bash",
+  command: "bash",
+  run: "bash",
+  run_command: "bash",
+  runcommand: "bash",
+  exec: "bash",
+  execute: "bash",
+  edit: "edit",
+  replace_in_file: "edit",
+  replaceinfile: "edit",
+  edit_file: "edit",
+  update_file: "edit",
+  write: "write",
+  write_file: "write",
+  writefile: "write",
+  create_file: "write",
+  grep: "grep",
+  search: "grep",
+  search_files: "grep",
+  searchfiles: "grep",
+  find_in_files: "grep",
+  find: "find",
+  ls: "ls",
+  list: "ls",
+  list_files: "ls",
+  listfiles: "ls"
 };
+
+const editReplacementSchema = z.object({
+  oldText: z.string(),
+  newText: z.string()
+});
 
 const toolCallSchema = z
   .object({
-    tool: z.enum(["read_file", "list_files", "search_files", "write_file", "append_file", "replace_in_file", "run_command"]),
+    tool: z.enum(["read", "bash", "edit", "write", "grep", "find", "ls"]),
     path: z.string().optional(),
-    content: z.string().optional(),
-    find: z.string().optional(),
-    replace: z.string().optional(),
-    query: z.string().optional(),
-    max_results: z.number().int().positive().optional(),
-    start_line: z.number().int().positive().optional(),
-    end_line: z.number().int().positive().optional(),
+    offset: z.number().int().positive().optional(),
+    limit: z.number().int().positive().optional(),
     command: z.string().optional(),
-    cwd: z.string().optional(),
-    timeout_ms: z.number().int().positive().optional()
+    timeout: z.number().positive().optional(),
+    edits: z.array(editReplacementSchema).optional(),
+    content: z.string().optional(),
+    pattern: z.string().optional(),
+    glob: z.string().optional(),
+    ignoreCase: z.boolean().optional(),
+    literal: z.boolean().optional(),
+    context: z.number().int().min(0).optional()
   })
   .strict()
   .superRefine((value, ctx) => {
-    if ((value.tool === "write_file" || value.tool === "append_file" || value.tool === "replace_in_file") && !value.path) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `${value.tool} requires path`
-      });
+    if (value.tool === "read" && !value.path) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "read requires path" });
     }
-    if ((value.tool === "write_file" || value.tool === "append_file") && typeof value.content !== "string") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `${value.tool} requires content`
-      });
+    if (value.tool === "bash" && (typeof value.command !== "string" || value.command.trim().length === 0)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "bash requires command" });
     }
-    if (value.tool === "replace_in_file" && (typeof value.find !== "string" || typeof value.replace !== "string")) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "replace_in_file requires find and replace"
-      });
+    if (value.tool === "edit") {
+      if (!value.path) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "edit requires path" });
+      }
+      if (!Array.isArray(value.edits) || value.edits.length === 0) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "edit requires edits" });
+      }
     }
-    if (value.tool === "search_files" && (typeof value.query !== "string" || value.query.trim().length === 0)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "search_files requires query"
-      });
+    if (value.tool === "write" && (!value.path || typeof value.content !== "string")) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "write requires path and content" });
     }
-    if (value.tool === "run_command" && (typeof value.command !== "string" || value.command.trim().length === 0)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "run_command requires command"
-      });
-    }
-    if (typeof value.start_line === "number" && typeof value.end_line === "number" && value.start_line > value.end_line) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "start_line must be <= end_line"
-      });
+    if ((value.tool === "grep" || value.tool === "find") && (typeof value.pattern !== "string" || value.pattern.trim().length === 0)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${value.tool} requires pattern` });
     }
   });
 
@@ -141,6 +132,22 @@ function parseJsonObjectString(value: unknown): Record<string, unknown> | null {
   }
 }
 
+function parseJsonArrayString(value: unknown): unknown[] | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!(trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function toStringValue(...values: unknown[]): string | undefined {
   for (const value of values) {
     if (typeof value === "string" && value.trim().length > 0) {
@@ -159,6 +166,24 @@ function toIntValue(...values: unknown[]): number | undefined {
       const parsed = Number.parseInt(value, 10);
       if (Number.isFinite(parsed)) {
         return parsed;
+      }
+    }
+  }
+  return undefined;
+}
+
+function toBooleanValue(...values: unknown[]): boolean | undefined {
+  for (const value of values) {
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === "true") {
+        return true;
+      }
+      if (normalized === "false") {
+        return false;
       }
     }
   }
@@ -379,45 +404,34 @@ function flattenRoot(value: unknown): unknown[] {
   return [objectValue];
 }
 
-function normalizeEditToolCalls(pathValue: string | undefined, direct: Record<string, unknown>): ToolCall[] {
-  if (!pathValue) {
-    return [];
-  }
+function parseEditEntries(direct: Record<string, unknown>): EditReplacement[] {
+  const explicitEdits = Array.isArray(direct.edits) ? direct.edits : parseJsonArrayString(direct.edits) ?? [];
+  const edits: EditReplacement[] = [];
 
-  const editsRaw = Array.isArray(direct.edits) ? direct.edits : [];
-  const legacyOldText = toStringValue(direct.oldText, direct.old_text, direct.find, direct.search_text);
-  const legacyNewText = toStringValue(direct.newText, direct.new_text, direct.replace, direct.replace_text);
-  const collected: ToolCall[] = [];
-
-  for (const entry of editsRaw) {
+  for (const entry of explicitEdits) {
     const record = asRecord(entry);
     if (!record) {
       continue;
     }
-    const candidate: ToolCall = {
-      tool: "replace_in_file",
-      path: pathValue,
-      find: toStringValue(record.oldText, record.old_text, record.find, record.search_text),
-      replace: toStringValue(record.newText, record.new_text, record.replace, record.replace_text)
-    };
-    const parsed = toolCallSchema.safeParse(candidate);
-    if (parsed.success) {
-      collected.push(parsed.data);
+    const replacement = editReplacementSchema.safeParse({
+      oldText: toStringValue(record.oldText, record.old_text, record.find, record.search_text),
+      newText: toStringValue(record.newText, record.new_text, record.replace, record.replace_text)
+    });
+    if (replacement.success) {
+      edits.push(replacement.data);
     }
   }
 
-  if (collected.length > 0) {
-    return collected;
+  if (edits.length > 0) {
+    return edits;
   }
 
-  const legacyCandidate: ToolCall = {
-    tool: "replace_in_file",
-    path: pathValue,
-    find: legacyOldText,
-    replace: legacyNewText
-  };
-  const parsed = toolCallSchema.safeParse(legacyCandidate);
-  return parsed.success ? [parsed.data] : [];
+  const oldText = toStringValue(direct.oldText, direct.old_text, direct.find, direct.search_text);
+  const newText = toStringValue(direct.newText, direct.new_text, direct.replace, direct.replace_text);
+  if (typeof oldText === "string" && typeof newText === "string") {
+    return [{ oldText, newText }];
+  }
+  return [];
 }
 
 function normalizeRawCall(raw: unknown): ToolCall[] {
@@ -458,38 +472,92 @@ function normalizeRawCall(raw: unknown): ToolCall[] {
     return [];
   }
 
-  const pathValue = toStringValue(direct.path, direct.file, direct.filepath, direct.file_path);
-  const toolToken = normalizeToolToken(rawToolName);
-  if (tool === "replace_in_file" && (toolToken === "edit" || Array.isArray(direct.edits) || direct.oldText !== undefined)) {
-    return normalizeEditToolCalls(pathValue, direct);
+  if (tool === "edit") {
+    const candidate = {
+      tool,
+      path: toStringValue(direct.path, direct.file, direct.filepath, direct.file_path),
+      edits: parseEditEntries(direct)
+    };
+    const parsed = toolCallSchema.safeParse(candidate);
+    return parsed.success ? [parsed.data as ToolCall] : [];
   }
 
-  const startLine = toIntValue(direct.start_line, direct.startLine, direct.line_start, direct.offset);
-  const limit = toIntValue(direct.limit);
-  const explicitEndLine = toIntValue(direct.end_line, direct.endLine, direct.line_end);
-  const endLine =
-    explicitEndLine ?? (typeof startLine === "number" && typeof limit === "number" ? startLine + limit - 1 : undefined);
+  if (tool === "read") {
+    const offset = toIntValue(direct.offset, direct.start_line, direct.startLine, direct.line_start);
+    const explicitLimit = toIntValue(direct.limit);
+    const endLine = toIntValue(direct.end_line, direct.endLine, direct.line_end);
+    const limit =
+      explicitLimit ?? (typeof offset === "number" && typeof endLine === "number" ? endLine - offset + 1 : undefined);
+    const candidate = {
+      tool,
+      path: toStringValue(direct.path, direct.file, direct.filepath, direct.file_path),
+      offset,
+      limit
+    };
+    const parsed = toolCallSchema.safeParse(candidate);
+    return parsed.success ? [parsed.data as ToolCall] : [];
+  }
 
-  const normalized: ToolCall = {
+  if (tool === "write") {
+    const candidate = {
+      tool,
+      path: toStringValue(direct.path, direct.file, direct.filepath, direct.file_path),
+      content: toStringValue(direct.content, direct.text)
+    };
+    const parsed = toolCallSchema.safeParse(candidate);
+    return parsed.success ? [parsed.data as ToolCall] : [];
+  }
+
+  if (tool === "bash") {
+    const timeoutSeconds =
+      toIntValue(direct.timeout) ??
+      (() => {
+        const timeoutMs = toIntValue(direct.timeout_ms, direct.timeoutMs);
+        return typeof timeoutMs === "number" ? Math.max(1, Math.ceil(timeoutMs / 1000)) : undefined;
+      })();
+
+    const candidate = {
+      tool,
+      command: toStringValue(direct.command, direct.cmd),
+      timeout: timeoutSeconds
+    };
+    const parsed = toolCallSchema.safeParse(candidate);
+    return parsed.success ? [parsed.data as ToolCall] : [];
+  }
+
+  if (tool === "grep") {
+    const candidate = {
+      tool,
+      path: toStringValue(direct.path, direct.file, direct.filepath, direct.file_path),
+      pattern: toStringValue(direct.pattern, direct.query, direct.search),
+      glob: toStringValue(direct.glob),
+      ignoreCase: toBooleanValue(direct.ignoreCase, direct.ignore_case),
+      literal: toBooleanValue(direct.literal),
+      context: toIntValue(direct.context),
+      limit: toIntValue(direct.limit, direct.max_results, direct.maxResults)
+    };
+    const parsed = toolCallSchema.safeParse(candidate);
+    return parsed.success ? [parsed.data as ToolCall] : [];
+  }
+
+  if (tool === "find") {
+    const candidate = {
+      tool,
+      path: toStringValue(direct.path, direct.file, direct.filepath, direct.file_path),
+      pattern: toStringValue(direct.pattern, direct.query, direct.search),
+      limit: toIntValue(direct.limit, direct.max_results, direct.maxResults)
+    };
+    const parsed = toolCallSchema.safeParse(candidate);
+    return parsed.success ? [parsed.data as ToolCall] : [];
+  }
+
+  const candidate = {
     tool,
-    path: pathValue,
-    content: toStringValue(direct.content, direct.text),
-    find: toStringValue(direct.find, direct.old, direct.search_text),
-    replace: toStringValue(direct.replace, direct.new, direct.replacement, direct.replace_text),
-    query: toStringValue(direct.query, direct.search, direct.pattern),
-    max_results: toIntValue(direct.max_results, direct.maxResults),
-    start_line: startLine,
-    end_line: endLine,
-    command: toStringValue(direct.command, direct.cmd),
-    cwd: toStringValue(direct.cwd, direct.working_dir, direct.workdir),
-    timeout_ms: toIntValue(direct.timeout_ms, direct.timeoutMs, direct.timeout)
+    path: toStringValue(direct.path, direct.file, direct.filepath, direct.file_path),
+    limit: toIntValue(direct.limit, direct.max_results, direct.maxResults)
   };
-
-  const parsed = toolCallSchema.safeParse(normalized);
-  if (!parsed.success) {
-    return [];
-  }
-  return [parsed.data];
+  const parsed = toolCallSchema.safeParse(candidate);
+  return parsed.success ? [parsed.data as ToolCall] : [];
 }
 
 export function parseToolCallsFromText(text: string): ToolCall[] {

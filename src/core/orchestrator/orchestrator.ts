@@ -29,7 +29,7 @@ export class Orchestrator {
   }
 
   public advance(task: TaskFrame): void {
-    this.checkpoint.task = task.raw;
+    this.checkpoint.task = task.objective;
     const index = this.phases.findIndex((phase) => phase.id === this.checkpoint.phase);
     const nextIndex = Math.min(index + 1, this.phases.length - 1);
     this.phases[index]!.status = "done";

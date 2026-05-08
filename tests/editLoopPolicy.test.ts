@@ -145,12 +145,12 @@ describe("edit loop policy", () => {
     await fs.mkdir(path.join(tmp, ".toki", "index"), { recursive: true });
     await fs.writeFile(path.join(tmp, targetPath), "export const answer = 1;\n", "utf8");
 
-    const repeatedSearch = '<tool_calls>[{"tool":"search_files","path":"src","query":"answer constant","max_results":5}]</tool_calls>';
+    const repeatedSearch = '<tool_calls>[{"tool":"grep","path":"src","pattern":"answer constant","limit":5}]</tool_calls>';
     const provider = new CountingProvider(new Array(6).fill(repeatedSearch), (messages) => {
       const system = messages[0]?.content ?? "";
       const transcript = messages[messages.length - 1]?.content ?? "";
       if (system.includes("repairing a stalled coding-agent edit turn")) {
-        if (transcript.includes("read_file src/app.ts")) {
+        if (transcript.includes("read src/app.ts")) {
           return '[{"tool":"edit","path":"src/app.ts","edits":[{"oldText":"export const answer = 1;","newText":"export const answer = 2;"}]}]';
         }
         return "[]";

@@ -4,12 +4,12 @@ import { parseToolCallsFromText } from "../src/core/toolCalls.js";
 describe("parseToolCallsFromText", () => {
   test("parses strict tool call JSON array", () => {
     const calls = parseToolCallsFromText(
-      '[{"tool":"read_file","path":"src/index.ts","start_line":1,"end_line":40},{"tool":"search_files","path":"src","query":"provider"}]'
+      '[{"tool":"read","path":"src/index.ts","offset":1,"limit":40},{"tool":"grep","path":"src","pattern":"provider"}]'
     );
 
     expect(calls).toEqual([
-      { tool: "read_file", path: "src/index.ts", start_line: 1, end_line: 40 },
-      { tool: "search_files", path: "src", query: "provider" }
+      { tool: "read", path: "src/index.ts", offset: 1, limit: 40 },
+      { tool: "grep", path: "src", pattern: "provider" }
     ]);
   });
 
@@ -18,27 +18,27 @@ describe("parseToolCallsFromText", () => {
       "I will inspect files now.",
       "<tool_calls>",
       "```json",
-      '[{"tool":"list_files","path":"src","max_results":25}]',
+      '[{"tool":"ls","path":"src","limit":25}]',
       "```",
       "</tool_calls>"
     ].join("\n");
 
     const calls = parseToolCallsFromText(text);
-    expect(calls).toEqual([{ tool: "list_files", path: "src", max_results: 25 }]);
+    expect(calls).toEqual([{ tool: "ls", path: "src", limit: 25 }]);
   });
 
   test("parses bracketed tool blocks with relaxed object syntax", () => {
     const text = [
       "[TOOL_CALL]",
       '{tool: "read", path: "README.md"}',
-      '{tool: "list_files", path: ".", max_results: 20}',
+      '{tool: "ls", path: ".", limit: 20}',
       "[/TOOL_CALL]"
     ].join("\n");
 
     const calls = parseToolCallsFromText(text);
     expect(calls).toEqual([
-      { tool: "read_file", path: "README.md" },
-      { tool: "list_files", path: ".", max_results: 20 }
+      { tool: "read", path: "README.md" },
+      { tool: "ls", path: ".", limit: 20 }
     ]);
   });
 
@@ -49,11 +49,10 @@ describe("parseToolCallsFromText", () => {
           id: "call_1",
           type: "function",
           function: {
-            name: "replace_in_file",
+            name: "edit",
             arguments: JSON.stringify({
               path: "README.md",
-              find: "foo",
-              replace: "bar"
+              edits: [{ oldText: "foo", newText: "bar" }]
             })
           }
         }
@@ -61,7 +60,13 @@ describe("parseToolCallsFromText", () => {
     });
 
     const calls = parseToolCallsFromText(text);
-    expect(calls).toEqual([{ tool: "replace_in_file", path: "README.md", find: "foo", replace: "bar" }]);
+    expect(calls).toEqual([
+      {
+        tool: "edit",
+        path: "README.md",
+        edits: [{ oldText: "foo", newText: "bar" }]
+      }
+    ]);
   });
 
   test("normalizes tool aliases and numeric strings", () => {
@@ -70,14 +75,14 @@ describe("parseToolCallsFromText", () => {
         name: "read-file",
         arguments: {
           path: "src/core/engine.ts",
-          start_line: "10",
-          end_line: "20"
+          offset: "10",
+          limit: "11"
         }
       }
     ]);
 
     const calls = parseToolCallsFromText(text);
-    expect(calls).toEqual([{ tool: "read_file", path: "src/core/engine.ts", start_line: 10, end_line: 20 }]);
+    expect(calls).toEqual([{ tool: "read", path: "src/core/engine.ts", offset: 10, limit: 11 }]);
   });
 
   test("parses pi-style read offsets and limits", () => {
@@ -93,10 +98,10 @@ describe("parseToolCallsFromText", () => {
     ]);
 
     const calls = parseToolCallsFromText(text);
-    expect(calls).toEqual([{ tool: "read_file", path: "src/core/engine.ts", start_line: 21, end_line: 30 }]);
+    expect(calls).toEqual([{ tool: "read", path: "src/core/engine.ts", offset: 21, limit: 10 }]);
   });
 
-  test("parses pi-style edit calls into replace operations", () => {
+  test("parses pi-style edit calls as canonical edit operations", () => {
     const text = JSON.stringify([
       {
         name: "edit",
@@ -112,8 +117,14 @@ describe("parseToolCallsFromText", () => {
 
     const calls = parseToolCallsFromText(text);
     expect(calls).toEqual([
-      { tool: "replace_in_file", path: "src/core/engine.ts", find: "const a = 1;", replace: "const a = 2;" },
-      { tool: "replace_in_file", path: "src/core/engine.ts", find: "const b = 3;", replace: "const b = 4;" }
+      {
+        tool: "edit",
+        path: "src/core/engine.ts",
+        edits: [
+          { oldText: "const a = 1;", newText: "const a = 2;" },
+          { oldText: "const b = 3;", newText: "const b = 4;" }
+        ]
+      }
     ]);
   });
 
@@ -130,33 +141,38 @@ describe("parseToolCallsFromText", () => {
     ]);
 
     const calls = parseToolCallsFromText(text);
-    expect(calls).toEqual([{ tool: "replace_in_file", path: "README.md", find: "hello", replace: "goodbye" }]);
+    expect(calls).toEqual([
+      {
+        tool: "edit",
+        path: "README.md",
+        edits: [{ oldText: "hello", newText: "goodbye" }]
+      }
+    ]);
   });
 
   test("drops invalid or incomplete calls", () => {
     const text = JSON.stringify([
-      { tool: "search_files", path: "src" },
-      { tool: "replace_in_file", path: "src/index.ts", find: "a" },
-      { tool: "write_file", path: "src/new.ts", content: "export {};" }
+      { tool: "grep", path: "src" },
+      { tool: "edit", path: "src/index.ts", edits: [] },
+      { tool: "write", path: "src/new.ts", content: "export {};" }
     ]);
 
     const calls = parseToolCallsFromText(text);
-    expect(calls).toEqual([{ tool: "write_file", path: "src/new.ts", content: "export {};" }]);
+    expect(calls).toEqual([{ tool: "write", path: "src/new.ts", content: "export {};" }]);
   });
 
-  test("parses run_command calls with aliases and timeout strings", () => {
+  test("parses bash calls with aliases and timeout strings", () => {
     const text = JSON.stringify([
       {
         name: "shell",
         arguments: {
           command: "npm test",
-          cwd: "..",
-          timeout_ms: "120000"
+          timeout: "120"
         }
       }
     ]);
 
     const calls = parseToolCallsFromText(text);
-    expect(calls).toEqual([{ tool: "run_command", command: "npm test", cwd: "..", timeout_ms: 120000 }]);
+    expect(calls).toEqual([{ tool: "bash", command: "npm test", timeout: 120 }]);
   });
 });

@@ -41,6 +41,7 @@ export interface TaskFrameEntities {
 
 export interface TaskFrame {
   raw: string;
+  objective: string;
   intent: string;
   entities: TaskFrameEntities;
   risk: "low" | "medium" | "high";

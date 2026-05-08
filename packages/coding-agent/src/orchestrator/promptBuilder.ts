@@ -6,7 +6,7 @@ function xml(tag: string, content: string): string {
 
 function renderTask(task: TaskFrame, phase: Phase, successCriteria: string): string {
   return [
-    `raw: ${task.raw}`,
+    `objective: ${task.objective}`,
     `intent: ${task.intent}`,
     `phase: ${phase.name}`,
     `risk: ${task.risk}`,

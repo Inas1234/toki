@@ -48,4 +48,36 @@ describe("buildTaskFrame", () => {
 
     expect(frame.entities.domains).toEqual(expect.arrayContaining(["engine", "tool", "context"]));
   });
+
+  test("derives a clean objective from transcript-heavy edit failures", () => {
+    const frame = buildTaskFrame(
+      [
+        "TOOLING(.)",
+        "  L INFO Model returned no valid tool calls on edit task (retry 1).",
+        "READ(README.md)",
+        "READ(package.json)",
+        "",
+        "EDIT(README.md)",
+        "  L UPDATED README.md",
+        "  L @@ diff @@",
+        "  - # Build the UI package",
+        "  + # Build all packages (required before running)",
+        "",
+        "I'll update the README to better reflect the current project setup and configuration.",
+        "",
+        "Why is this happening i mean why cant it understand the actual context or whatever how does this work in other AI coding agents and why is mine so stupid i dont get it the model i am using isnt bad like it is not the models fault it is the agent fault",
+        "",
+        "implement it"
+      ].join("\n")
+    );
+
+    expect(frame.objective).toContain("implement it");
+    expect(frame.objective).toContain("why cant it understand the actual context");
+    expect(frame.objective).not.toContain("README.md");
+    expect(frame.objective).not.toContain("package.json");
+    expect(frame.entities.paths).not.toContain("README.md");
+    expect(frame.entities.paths).not.toContain("package.json");
+    expect(frame.entities.paths).not.toContain("a/README.md");
+    expect(frame.entities.paths).not.toContain("b/README.md");
+  });
 });

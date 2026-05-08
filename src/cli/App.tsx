@@ -448,7 +448,7 @@ export function App({ engine }: AppProps) {
     setMessages((prev) => [...prev, { id: assistantId, speaker: "toki", content: "" }]);
 
     try {
-      const result = await engine.runTurn(trimmed, (chunk) => {
+      const result = await engine.runTurn(trimmed, (chunk: string) => {
         setThinking(false);
         setMessages((prev) => prev.map((msg) => (msg.id === assistantId ? { ...msg, content: `${msg.content}${chunk}` } : msg)));
       });

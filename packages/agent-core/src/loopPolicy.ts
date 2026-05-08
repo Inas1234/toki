@@ -3,15 +3,15 @@ import type { ToolCall } from "./toolCalls.js";
 const EDIT_EXPLORATION_ONLY_LIMIT = 2;
 
 function isMutationTool(call: ToolCall): boolean {
-  return call.tool === "write_file" || call.tool === "append_file" || call.tool === "replace_in_file";
+  return call.tool === "write" || call.tool === "edit";
 }
 
 function isExplorationOnlyTool(call: ToolCall): boolean {
-  return call.tool === "search_files" || call.tool === "list_files";
+  return call.tool === "grep" || call.tool === "find" || call.tool === "ls";
 }
 
 function isConcreteEditProgressTool(call: ToolCall): boolean {
-  return call.tool === "read_file" || isMutationTool(call);
+  return call.tool === "read" || isMutationTool(call);
 }
 
 export interface EditLoopRoundInput {
